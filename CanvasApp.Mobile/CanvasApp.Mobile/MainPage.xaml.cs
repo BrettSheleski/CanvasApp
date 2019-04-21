@@ -8,6 +8,7 @@ using Xamarin.Forms;
 using SkiaSharp.Views.Forms;
 using System.Numerics;
 using SkiaSharp;
+using System.Drawing;
 
 namespace CanvasApp.Mobile
 {
@@ -20,82 +21,136 @@ namespace CanvasApp.Mobile
         {
             InitializeComponent();
         }
-        private void Canvas_PaintSurface(object sender, SKPaintSurfaceEventArgs e)
+        private async void Canvas_PaintSurface(object sender, SKPaintSurfaceEventArgs e)
         {
             var canvas = e.Surface.Canvas;
             var info = e.Info;
 
             canvas.Clear();
 
-            foo(canvas, info);
+            Complex p1 = new Complex(-1.5, 1);
+            Complex p2 = new Complex(0.5, -1);
 
+            await DrawMandelbrotAsync(canvas, info, p1, p2);
 
         }
 
-        void foo(SKCanvas canvas, SKImageInfo info)
+        Task DrawMandelbrotAsync(SKCanvas canvas, SKImageInfo info, Complex p1, Complex p2)
         {
-            double r = -1.5;
-            double i = 0.5;
+            float minR = (float)Math.Min(p1.Real, p2.Real),
+                maxR = (float)Math.Max(p1.Real, p2.Real),
+                minI = (float)Math.Min(p1.Imaginary, p2.Imaginary),
+                maxI = (float)Math.Max(p1.Imaginary, p2.Imaginary);
 
+            float offsetX, offsetY, scaleX, scaleY;
 
+            offsetX = info.Width / 2f;
+            offsetY = info.Height / 2f;
 
-            float minR = -2, maxR = 2, minI = -2, maxI = -2;
+            scaleX = info.Width / (maxR - minR);
+            scaleY = info.Height / (maxI - minI);
 
-            Complex z = new Complex(r, i);
+            PointF center = new PointF((minR + maxR) / 2f, (minI + maxI) / 2f);
 
+            float scale = Math.Min(scaleX, scaleY);
 
-            float offsetX, offsetY;
+            canvas.Translate(offsetX, offsetY);
+            canvas.Scale(scale);
+            canvas.Translate(-center.X, -center.Y);
 
-            offsetX = info.Width / 2;
-            offsetY = info.Height / 2;
-
-            using (SKPaint text = new SKPaint { Color = Color.Black.ToSKColor(), Style = SKPaintStyle.Stroke, StrokeWidth = 1, TextSize = 30 })
-            using (SKPaint red = new SKPaint { Color = Color.Red.ToSKColor(), Style = SKPaintStyle.StrokeAndFill, StrokeWidth = 10, StrokeCap = SKStrokeCap.Round })
-            using (SKPaint blue = new SKPaint())
+            SKMatrix iMatrix;
+            SKPoint p;
+            if (canvas.TotalMatrix.TryInvert(out iMatrix))
             {
-                blue.Style = SKPaintStyle.StrokeAndFill;
-                blue.Color = Color.Blue.ToSKColor();
-                blue.StrokeWidth = 10;
+                p = iMatrix.MapPoint(0, 0);
 
-                var numbers = GetIteration(z, 1).TakeWhile((n, ix) => ix < 10 && z.Magnitude <= 2);
+                minR = p.X;
+                minI = p.Y;
 
-                SKPoint? lastPoint = null;
-                SKPoint center;
-                SKPoint textOffset = new SKPoint(15f, 15f);
+                p = iMatrix.MapPoint(info.Width, info.Height);
 
-                foreach (var number in numbers)
+                maxR = p.X;
+                maxI = p.Y;
+            }
+
+            const int MAX_ITERATION_COUNT = 10;
+
+            SKColor[] colors = new SKColor[MAX_ITERATION_COUNT];
+
+            Random rand = new Random(DateTime.Now.Millisecond);
+
+            for (int i = 0; i < MAX_ITERATION_COUNT; ++i)
+            {
+                colors[i] = SKColor.FromHsl((float)rand.NextDouble() * 360, 255, 255);
+            }
+
+            long rank;
+
+            float step = 1 / scale;
+            for (float r = minR; r < maxR; r += step)
+            {
+                for (float i = minI; i < maxI; i += step)
                 {
-                    center = new SKPoint(offsetX + (float)number.Real, offsetY + (float)number.Imaginary);
+                    p = new SKPoint(r, i);
 
-                    if (lastPoint.HasValue)
+                    rank = GetRank(p.X, p.Y, MAX_ITERATION_COUNT);
+
+                    if (rank == MAX_ITERATION_COUNT)
                     {
-                        canvas.DrawLine(lastPoint.Value, center, red);
-                        canvas.DrawText($"({number.Real},{number.Imaginary})", center + textOffset, text);
+                        canvas.DrawPoint(p, Xamarin.Forms.Color.Black.ToSKColor());
                     }
-
-                    canvas.DrawCircle(center, 5, blue);
-
-                    lastPoint = center;
+                    else
+                    {
+                        canvas.DrawPoint(p, colors[rank]);
+                    }
                 }
             }
 
-        }
 
-        IEnumerable<Complex> GetIteration(Complex z, Complex constant)
-        {
-            yield return z;
+            return Task.CompletedTask;
 
-            while (true)
+            if (canvas.TotalMatrix.TryInvert(out iMatrix))
             {
-                z = GetNext(z, constant);
+                for (float x = 0; x < info.Width; ++x)
+                {
+                    for (float y = 0; y < info.Height; ++y)
+                    {
+                        p = iMatrix.MapPoint(x, y);
 
-                yield return z;
+                        rank = GetRank(p.X, p.Y, MAX_ITERATION_COUNT);
+
+                        if (rank == MAX_ITERATION_COUNT)
+                        {
+                            canvas.DrawPoint(p, Xamarin.Forms.Color.Black.ToSKColor());
+                        }
+                        else
+                        {
+                            canvas.DrawPoint(p, colors[rank]);
+                        }
+                    }
+                }
             }
+
+            return Task.CompletedTask;
         }
 
-        Complex GetNext(Complex z, Complex constant)
+        long GetRank(double real, double imaginary, long maxN)
         {
-            return (z * z) + constant;
+            double r = 0, i = 0, xnew, ynew;
+            int n;
+
+            for (n = 0; n < maxN; ++n)
+            {
+                xnew = r * r - i * i + real;
+                ynew = 2 * r * i + imaginary;
+                if (xnew * xnew + ynew * ynew > 4)
+                    return (n);
+                r = xnew;
+                i = ynew;
+            }
+
+            return maxN;
         }
+
     }
 }
