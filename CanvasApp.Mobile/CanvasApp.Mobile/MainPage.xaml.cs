@@ -19,9 +19,10 @@ namespace CanvasApp.Mobile
     {
         public MainPage()
         {
+            SetColors();
             InitializeComponent();
         }
-        private async void Canvas_PaintSurface(object sender, SKPaintSurfaceEventArgs e)
+        private void Canvas_PaintSurface(object sender, SKPaintSurfaceEventArgs e)
         {
             var canvas = e.Surface.Canvas;
             var info = e.Info;
@@ -31,12 +32,55 @@ namespace CanvasApp.Mobile
             Complex p1 = new Complex(-1.5, 1);
             Complex p2 = new Complex(0.5, -1);
 
-            await DrawMandelbrotAsync(canvas, info, p1, p2);
+            var tasks = DrawMandelbrotAsync(canvas, info);
 
+            Task.WaitAll(tasks.ToArray());
         }
 
-        Task DrawMandelbrotAsync(SKCanvas canvas, SKImageInfo info, Complex p1, Complex p2)
+        void SetColors()
         {
+
+            SKColor[] colors = new SKColor[_maxIterations];
+
+            _colors.CopyTo(colors, 0);
+
+            Random rand = new Random(DateTime.Now.Millisecond);
+
+            for (long i = _colors.LongLength; i < _maxIterations; ++i)
+            {
+                colors[i] = SKColor.FromHsl((float)rand.NextDouble() * 360, 255, 255);
+            }
+
+            _colors = colors;
+        }
+
+        public RectangleF CanvasBounds
+        {
+            get { return (RectangleF)GetValue(CanvasBoundsProperty); }
+            set { SetValue(CanvasBoundsProperty, value); }
+        }
+
+        public static readonly BindableProperty CanvasBoundsProperty = BindableProperty.Create(nameof(CanvasBounds), typeof(RectangleF), typeof(MainPage), new RectangleF(new PointF(-1.5f, 1), new SizeF(2, -2)), BindingMode.TwoWay, propertyChanged: OnCanvasBoundsPropertyChanged);
+        private SKMatrix _canvasInvertMatrix;
+        private long _maxIterations = 100;
+
+        SKColor[] _colors = new SKColor[] { };
+
+        private static void OnCanvasBoundsPropertyChanged(BindableObject bindable, object oldValue, object newValue)
+        {
+            ((MainPage)bindable).OnCanvasBoundsChanged((RectangleF)oldValue, (RectangleF)newValue);
+        }
+
+        protected virtual void OnCanvasBoundsChanged(RectangleF oldValue, RectangleF newValue)
+        {
+            Canvas.InvalidateSurface();
+        }
+
+        IEnumerable<Task> DrawMandelbrotAsync(SKCanvas canvas, SKImageInfo info)
+        {
+            Complex p1 = new Complex(CanvasBounds.Left, CanvasBounds.Top),
+                p2 = new Complex(CanvasBounds.Right, CanvasBounds.Bottom);
+
             float minR = (float)Math.Min(p1.Real, p2.Real),
                 maxR = (float)Math.Max(p1.Real, p2.Real),
                 minI = (float)Math.Min(p1.Imaginary, p2.Imaginary),
@@ -55,89 +99,98 @@ namespace CanvasApp.Mobile
             float scale = Math.Min(scaleX, scaleY);
 
             canvas.Translate(offsetX, offsetY);
-            canvas.Scale(scale);
+            canvas.Scale(scale, -scale);
             canvas.Translate(-center.X, -center.Y);
 
-            SKMatrix iMatrix;
-            SKPoint p;
-            if (canvas.TotalMatrix.TryInvert(out iMatrix))
+            if (canvas.TotalMatrix.TryInvert(out _canvasInvertMatrix))
             {
-                p = iMatrix.MapPoint(0, 0);
+                var pTemp = _canvasInvertMatrix.MapPoint(minR, maxI);
 
-                minR = p.X;
-                minI = p.Y;
+                minR = pTemp.X;
+                maxI = pTemp.Y;
 
-                p = iMatrix.MapPoint(info.Width, info.Height);
 
-                maxR = p.X;
-                maxI = p.Y;
+                pTemp = _canvasInvertMatrix.MapPoint(maxR, minI);
+
+                maxR = pTemp.X;
+                maxI = pTemp.Y;
+
+
             }
 
-            const int MAX_ITERATION_COUNT = 10;
-
-            SKColor[] colors = new SKColor[MAX_ITERATION_COUNT];
-
-            Random rand = new Random(DateTime.Now.Millisecond);
-
-            for (int i = 0; i < MAX_ITERATION_COUNT; ++i)
-            {
-                colors[i] = SKColor.FromHsl((float)rand.NextDouble() * 360, 255, 255);
-            }
-
-            long rank;
 
             float step = 1 / scale;
-            for (float r = minR; r < maxR; r += step)
+
+            int divisionsH = 4, divisionsW = 4;
+
+            float chunkW = Math.Abs(CanvasBounds.Width / divisionsW);
+            float chunkH = Math.Abs(CanvasBounds.Height / divisionsH);
+
+            for (int h = 0; h < divisionsH; ++h)
             {
-                for (float i = minI; i < maxI; i += step)
+                for (int w = 0; w < divisionsW; ++w)
                 {
-                    p = new SKPoint(r, i);
+                    // avoid closure issues.
+                    int ww = w;
+                    int hh = h;
 
-                    rank = GetRank(p.X, p.Y, MAX_ITERATION_COUNT);
+                    
+                    yield return Task.Run(() =>
+                    {
+                        float startR = minR + (ww * chunkW),
+                            endR = startR + chunkW,
+                            startI = minI + (hh * chunkH),
+                            endI = startI + chunkH;
 
-                    if (rank == MAX_ITERATION_COUNT)
-                    {
-                        canvas.DrawPoint(p, Xamarin.Forms.Color.Black.ToSKColor());
-                    }
-                    else
-                    {
-                        canvas.DrawPoint(p, colors[rank]);
-                    }
+
+                        long rank;
+
+                        for (float r = startR; r < endR; r += step)
+                        {
+                            for (float i = startI; i < endI; i += step)
+                            {
+                                rank = GetRank(r, i, _maxIterations);
+
+                                if (rank == _maxIterations)
+                                {
+                                    canvas.DrawPoint(r, i, Xamarin.Forms.Color.Black.ToSKColor());
+                                }
+                                else
+                                {
+                                    canvas.DrawPoint(r, i, _colors[rank]);
+                                }
+                            }
+                        }
+                    });
                 }
             }
 
+            //for (float r = minR; r < maxR; r += step)
+            //{
+            //    for (float i = minI; i < maxI; i += step)
+            //    {
+            //        p = new SKPoint(r, i);
 
-            return Task.CompletedTask;
+            //        rank = GetRank(p.X, p.Y, _maxIterations);
 
-            if (canvas.TotalMatrix.TryInvert(out iMatrix))
-            {
-                for (float x = 0; x < info.Width; ++x)
-                {
-                    for (float y = 0; y < info.Height; ++y)
-                    {
-                        p = iMatrix.MapPoint(x, y);
+            //        if (rank == _maxIterations)
+            //        {
+            //            canvas.DrawPoint(p, Xamarin.Forms.Color.Black.ToSKColor());
+            //        }
+            //        else
+            //        {
+            //            canvas.DrawPoint(p, _colors[rank]);
+            //        }
+            //    }
+            //}
 
-                        rank = GetRank(p.X, p.Y, MAX_ITERATION_COUNT);
-
-                        if (rank == MAX_ITERATION_COUNT)
-                        {
-                            canvas.DrawPoint(p, Xamarin.Forms.Color.Black.ToSKColor());
-                        }
-                        else
-                        {
-                            canvas.DrawPoint(p, colors[rank]);
-                        }
-                    }
-                }
-            }
-
-            return Task.CompletedTask;
+            //return Task.CompletedTask;
         }
 
         long GetRank(double real, double imaginary, long maxN)
         {
             double r = 0, i = 0, xnew, ynew;
-            int n;
+            long n;
 
             for (n = 0; n < maxN; ++n)
             {
@@ -152,5 +205,20 @@ namespace CanvasApp.Mobile
             return maxN;
         }
 
+        private void Canvas_Touch(object sender, SKTouchEventArgs e)
+        {
+            if (e.ActionType == SKTouchAction.Pressed)
+            {
+                //               _maxIterations *= 10;
+                //             SetColors();
+
+                var newCenter = _canvasInvertMatrix.MapPoint(e.Location);
+
+                RectangleF b = new RectangleF(newCenter.X - CanvasBounds.Width / 4, newCenter.Y - CanvasBounds.Height / 4, CanvasBounds.Width / 2, CanvasBounds.Height / 2);
+
+
+                this.CanvasBounds = b;
+            }
+        }
     }
 }

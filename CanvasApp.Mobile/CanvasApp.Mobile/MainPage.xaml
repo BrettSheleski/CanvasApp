@@ -7,7 +7,8 @@
 
     <Grid>
 
-        <skia:SKCanvasView x:Name="Canvas" PaintSurface="Canvas_PaintSurface" />
+        <skia:SKCanvasView x:Name="Canvas" PaintSurface="Canvas_PaintSurface" EnableTouchEvents="True" Touch="Canvas_Touch" >
+        </skia:SKCanvasView>
 
     </Grid>
 
